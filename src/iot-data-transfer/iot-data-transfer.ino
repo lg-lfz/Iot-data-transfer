@@ -3,13 +3,17 @@
 #include <ESPAsyncTCP.h>
 #include <InfluxDbClient.h>
 #include <InfluxDbCloud.h>
+#include <Seeed_BME280.h>  // Implementieren der Seeed Bibliothek, ermöglicht die Kommunikation mit dem BME
+#include <Wire.h>          // Implementieren der Wire Bibliothek, ermöglicht dem Arduino mit Geräten zu kommunizieren, welche das I²C Protokoll verwenden
+
+BME280 bme280;
 
 ESP8266WiFiMulti wifiMulti;
 // Influx DB Cloud Settings
-#define INFLUXDB_URL "https://eu-central-1-1.aws.cloud2.influxdata.com"
+#define INFLUXDB_URL "https://us-east-1-1.aws.cloud2.influxdata.com"
 #define INFLUXDB_TOKEN ""
 #define INFLUXDB_ORG ""
-#define INFLUXDB_BUCKET "temperature"
+#define INFLUXDB_BUCKET "Temperature"
 // Time zone info
 // https://www.gnu.org/software/libc/manual/html_node/TZ-Variable.html
 // Examples:
@@ -28,86 +32,77 @@ Point sensor("Temperature");
 // WIFI Settings
 constexpr const char *wifi_ssid = "";
 constexpr const char *wifi_psk = "";
-constexpr float board_voltage = 3.3; // Spannung an den ESP8266 Pins
+constexpr float board_voltage = 3.3;  // Spannung an den ESP8266 Pins
 
 // TMP36 Pin Variable
-int sensorPin = A0; // Analoger Eingangspin, an welchem der TMP36 angeschlossen ist
-                    // Die Auflösung beträgt 10 mV / Grad Celsius bei
-                    // 500 mV Offset um das Messen negativer Temperaturen zu ermöglichen
+int sensorPin = A0;  // Analoger Eingangspin, an welchem der TMP36 angeschlossen ist
+                     // Die Auflösung beträgt 10 mV / Grad Celsius bei
+                     // 500 mV Offset um das Messen negativer Temperaturen zu ermöglichen
 bool led_on = true;
 
-void setup()
-{
-  Serial.begin(115200);         // Start des seriellen Monitors
-  
+void setup() {
+  Serial.begin(115200);  // Start des seriellen Monitors
+
+  if (!bme280.init())  // Wenn keine Daten vom BME abgefragt werden können...
+  {
+    Serial.println("FEHLER BEIM STARTEN DES BME280 (TEMPERATUR MESSGERÄT)");  // ...dann soll eine Fehlermeldung ausgegeben werden.
+  }
+
   // Add tags to the data point
   sensor.addTag("device", "ESP8266");
   sensor.addTag("room", "Office");
   sensor.addTag("sensor", "TMP36GZ");
-  
-  pinMode(LED_BUILTIN, OUTPUT); // Initialize the LED_BUILTIN pin as an output
+
+  pinMode(LED_BUILTIN, OUTPUT);  // Initialize the LED_BUILTIN pin as an output
   connect_to_wifi();
 }
 
-void loop()
-{
-  int reading = analogRead(sensorPin); // Den Signalausgang des Temperatursensors lesen
-  Serial.print("Raw value (0-1023): ");
-  Serial.println(reading);
-  float voltage = reading * board_voltage; // Umwandlung der Messung in mV
-  voltage /= 1024.0;
-
-  Serial.print("Gemessene Spannung: ");
-  Serial.print(voltage); // Ausgabe der gemessenen Spannung in mV
-  Serial.print(" mV;\t");
-  float temperatureC = (voltage - 0.5) * 100; // Umrechnung der Spannung in C°
+void loop() {
+  
+  float temperatureC = bme280.getTemperature(); //Auslesen des BME280 über die BME280 Bibliothekt
 
   Serial.print("Gemessene Temperatur: ");
-  Serial.print(temperatureC); // Ausgabe der berechneten Temperatur in °C
+  Serial.print(temperatureC);  // Ausgabe der berechneten Temperatur in °C
   Serial.println(" °C");
 
   // Clear fields for reusing the point. Tags will remain the same as set above.
   sensor.clearFields();
-  
+
   // Store measured value into point
   // Report temperature
   sensor.addField("temperature", temperatureC);
-  
+
   // Print what are we exactly writing
   Serial.print("Schreibe Daten nach ");
   Serial.println(client.getServerUrl());
   Serial.println(sensor.toLineProtocol());
-  
+
   // Check WiFi connection and reconnect if needed
   if (wifiMulti.run() != WL_CONNECTED) {
     Serial.println("Wifi connection lost");
   }
-  
+
   // Write point
   if (!client.writePoint(sensor)) {
     Serial.print("InfluxDB write failed: ");
     Serial.println(client.getLastErrorMessage());
   }
-  
+
   // Show time
   time_t tnow = time(nullptr);
   Serial.print("Zeit jetzt: ");
   Serial.println(ctime(&tnow));
 
-  if (led_on)
-  {
-    digitalWrite(LED_BUILTIN, LOW); // Turn the LED on by making the voltage LOW
-  }
-  else
-  {
-    digitalWrite(LED_BUILTIN, HIGH); // Turn the LED off by making the voltage HIGH
+  if (led_on) {
+    digitalWrite(LED_BUILTIN, LOW);  // Turn the LED on by making the voltage LOW
+  } else {
+    digitalWrite(LED_BUILTIN, HIGH);  // Turn the LED off by making the voltage HIGH
   }
   led_on = !led_on;
-  delay(1000); // 1 Sekunde warten bis zur nächsten Messung
+  delay(1000);  // 1 Sekunde warten bis zur nächsten Messung
 }
 
-void connect_to_wifi()
-{
+void connect_to_wifi() {
   Serial.print("Connecting to ");
   Serial.println(wifi_ssid);
 
@@ -116,14 +111,14 @@ void connect_to_wifi()
      network-issues with your other WiFi-devices on your WiFi-network. */
   WiFi.mode(WIFI_STA);
   wifiMulti.addAP(wifi_ssid, wifi_psk);
-  
+
   Serial.print("Connecting to wifi");
   while (wifiMulti.run() != WL_CONNECTED) {
     Serial.print(".");
     delay(100);
   }
   Serial.println();
-  
+
   // Accurate time is necessary for certificate validation and writing in batches
   // We use the NTP servers in your area as provided by: https://www.pool.ntp.org/zone/
   // Syncing progress and the time will be printed to Serial.
